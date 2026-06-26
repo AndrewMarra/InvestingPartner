@@ -72,7 +72,7 @@ class Engine:
         if not sch.get("market_hours_only", True): return True
         return self.market.is_market_open() or bool(sch.get("after_hours", False))
 
-    def run_cycle(self, force=False):
+    def run_cycle(self, force=False, skip_triage=False):
         mode = "PAPER" if self.cfg.secrets.is_paper else "*** LIVE ***"
         console.rule(f"[bold]Cycle [{mode}]")
 
@@ -139,7 +139,7 @@ class Engine:
         tri = self.research.triage(compact)
         console.print(f"[dim]triage: worth={tri.get('worth_analyzing')} "
                       f"watch={tri.get('watch')} ({tri.get('reason','')[:60]})[/]")
-        if not tri.get("worth_analyzing"):
+        if not skip_triage and not tri.get("worth_analyzing"):
             self._snapshot(); return {"queued": 0, "triaged_out": True}
 
         # 5) decision

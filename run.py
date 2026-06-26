@@ -31,7 +31,8 @@ def _Engine():
 
 
 # ── single-user ──────────────────────────────────────────────────────
-def cmd_once(args): _Engine()(args.config).run_cycle(force=args.force)
+def cmd_once(args):
+    _Engine()(args.config).run_cycle(force=args.force, skip_triage=getattr(args, 'skip_triage', False))
 def cmd_report(args): _Engine()(args.config).report()
 
 
@@ -75,6 +76,13 @@ def cmd_backtest(args):
         console.print(f"  {k:20} {res[k]}")
     console.print(f"\n  vs SPY buy & hold: {bh['total_return_pct']}% (dd {bh['max_drawdown_pct']}%)")
 
+def cmd_test_notify(args):
+    from aiportfolio.config import load_config
+    from aiportfolio.notify.sms import Notifier
+    cfg = load_config(args.config)
+    n = Notifier(cfg.secrets, cfg)
+    n.send("🤖 Trading Buddy test message — if you see this, notifications are working!")
+    console.print("[green]Test message sent.[/] Check your Telegram (or console above).")
 
 # ── multi-user ───────────────────────────────────────────────────────
 def cmd_run_all(args):
@@ -110,7 +118,10 @@ def main():
     p.add_argument("--config", default=None)
     sub = p.add_subparsers(dest="command", required=True)
 
-    o = sub.add_parser("once"); o.add_argument("--force", action="store_true"); o.set_defaults(func=cmd_once)
+    o = sub.add_parser("once")
+    o.add_argument("--force", action="store_true")
+    o.add_argument("--skip-triage", action="store_true", help="Bypass triage gate (for testing)")
+    o.set_defaults(func=cmd_once)
     sub.add_parser("loop").set_defaults(func=cmd_loop)
     sub.add_parser("report").set_defaults(func=cmd_report)
     sub.add_parser("status").set_defaults(func=cmd_status)
@@ -120,6 +131,7 @@ def main():
     b.add_argument("--days", type=int, default=180); b.add_argument("--lookback", type=int, default=20)
     b.add_argument("--top-n", type=int, default=3); b.set_defaults(func=cmd_backtest)
 
+    sub.add_parser("test-notify", help="Send a test Telegram/SMS message").set_defaults(func=cmd_test_notify)
     ra = sub.add_parser("run-all"); ra.add_argument("--force", action="store_true"); ra.set_defaults(func=cmd_run_all)
 
     u = sub.add_parser("users"); u.add_argument("--db", default="portfolio.db")

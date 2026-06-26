@@ -5,7 +5,7 @@
 # ─────────────────────────────────────────────────────────────────────
 
 portfolio:
-  starting_capital: 1000
+  starting_capital: 100000
   base_currency: USD
 
 # ─── Trade-style modes the buddy is allowed to use ───────────────────
@@ -26,14 +26,14 @@ modes:
 # triage says something is worth a full analysis. Opus is intentionally
 # NOT used in the automated loop — too costly to poll with.
 models:
-  decision_model: claude-sonnet-4-6     # complex reasoning (only when needed)
-  triage_model: claude-haiku-4-5        # cheap directed pre-filter every cycle
+  decision_model: claude-sonnet-4-6 # complex reasoning (only when needed)
+  triage_model: claude-haiku-4-5 # cheap directed pre-filter every cycle
   max_tokens: 4096
   temperature: 0.3
 
 cost_controls:
   triage_enabled: true
-  max_decision_calls_per_day: 12        # hard cap on expensive model calls
+  max_decision_calls_per_day: 12 # hard cap on expensive model calls
   # Skip the cycle entirely if fewer than this many candidates show a signal.
   min_signals_to_analyze: 1
 
@@ -61,7 +61,7 @@ research:
     - GLD
 
 options:
-  enabled: true                          # gated further by modes.enabled
+  enabled: true # gated further by modes.enabled
   allowed_underlyings: [SPY, QQQ, IWM]
   max_options_trades_per_day: 3
   max_premium_pct_per_trade: 3
@@ -77,7 +77,7 @@ risk:
   min_confidence_to_trade: 0.55
   stop_loss_pct: 25
   take_profit_pct: 60
-  daily_loss_limit_pct: 10   # kill switch: pause new buys if down this % on the day
+  daily_loss_limit_pct: 10 # kill switch: pause new buys if down this % on the day
 
 schedule:
   market_hours_only: true
@@ -88,7 +88,7 @@ schedule:
 notify:
   enabled: true
   # Per-user in the product; users choose any of: sms | telegram | console.
-  channels: [console]
+  channels: [telegram]
   min_confidence_to_notify: 0.6
 
 storage:
