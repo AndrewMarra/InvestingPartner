@@ -1,0 +1,8 @@
+anthropic>=0.40.0
+alpaca-py>=0.33.0
+finnhub-python>=2.4.20
+APScheduler>=3.10.4
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+rich>=13.7.0
+cryptography>=43.0.0

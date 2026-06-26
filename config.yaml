@@ -1,0 +1,99 @@
+# ─────────────────────────────────────────────────────────────────────
+#  AI Trading Buddy — config
+#  In the multi-user product these per-user settings live in the database;
+#  this file is the single-user / default template.
+# ─────────────────────────────────────────────────────────────────────
+
+portfolio:
+  starting_capital: 1000
+  base_currency: USD
+
+# ─── Trade-style modes the buddy is allowed to use ───────────────────
+# Enable any combination. The AI ONLY proposes trades in enabled modes.
+#   equity_short  regular short-term stock shares   (DEFAULT)
+#   equity_day    intraday stock day trades
+#   equity_long   long-term stock holds
+#   option_short  short-term options incl. 0DTE
+#   option_long   long-dated options (LEAPS)
+modes:
+  enabled: [equity_short]
+  # For short-term modes, what "short term" means to you:
+  #   intraday_1d | daily | multiday | weekly | monthly
+  short_term_horizon: daily
+
+# ─── Tiered models (cost control) ────────────────────────────────────
+# Cheap model triages each cycle; the stronger model only runs when the
+# triage says something is worth a full analysis. Opus is intentionally
+# NOT used in the automated loop — too costly to poll with.
+models:
+  decision_model: claude-sonnet-4-6     # complex reasoning (only when needed)
+  triage_model: claude-haiku-4-5        # cheap directed pre-filter every cycle
+  max_tokens: 4096
+  temperature: 0.3
+
+cost_controls:
+  triage_enabled: true
+  max_decision_calls_per_day: 12        # hard cap on expensive model calls
+  # Skip the cycle entirely if fewer than this many candidates show a signal.
+  min_signals_to_analyze: 1
+
+trading:
+  max_trades_per_day: 8
+  no_crypto: true
+  notify_lead_minutes: 10
+
+research:
+  candidate_universe:
+    - SPY
+    - QQQ
+    - IWM
+    - NVDA
+    - AVGO
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - JPM
+    - XLE
+    - XLV
+    - LLY
+    - COST
+    - GLD
+
+options:
+  enabled: true                          # gated further by modes.enabled
+  allowed_underlyings: [SPY, QQQ, IWM]
+  max_options_trades_per_day: 3
+  max_premium_pct_per_trade: 3
+  max_contracts: 5
+  allow_0dte: true
+
+risk:
+  max_position_pct: 20
+  min_cash_pct: 5
+  max_trades_per_run: 3
+  max_trade_notional_pct: 15
+  allow_shorting: false
+  min_confidence_to_trade: 0.55
+  stop_loss_pct: 25
+  take_profit_pct: 60
+  daily_loss_limit_pct: 10   # kill switch: pause new buys if down this % on the day
+
+schedule:
+  market_hours_only: true
+  after_hours: false
+  run_on_weekends: false
+  timezone: America/New_York
+
+notify:
+  enabled: true
+  # Per-user in the product; users choose any of: sms | telegram | console.
+  channels: [console]
+  min_confidence_to_notify: 0.6
+
+storage:
+  db_path: portfolio.db
+
+benchmark:
+  symbol: SPY
+  personal_return_pct: null

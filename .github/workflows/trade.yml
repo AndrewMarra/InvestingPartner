@@ -1,0 +1,61 @@
+name: AI Trading Buddy
+
+# Free on PUBLIC repos (unlimited Actions minutes). Cron is in UTC and does NOT
+# observe daylight saving, so we fire generously across the widest possible US
+# market window (13:00–21:00 UTC, Mon–Fri). The bot itself checks Alpaca's real
+# market clock each run and skips when the market is actually closed — so DST is
+# handled correctly without touching this file.
+on:
+  schedule:
+    - cron: "*/15 13-20 * * 1-5"   # every 15 min during the trading day (UTC)
+  workflow_dispatch: {}             # lets you trigger a run by hand
+
+# Avoid overlapping runs stepping on each other.
+concurrency:
+  group: trading-buddy
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # All secrets come from repo Settings -> Secrets and variables -> Actions.
+      # NEVER commit real keys. The .env file is gitignored for local use only.
+      - name: Run one decision cycle for all users
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_BASE_URL: https://paper-api.alpaca.markets
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          MASTER_ENCRYPTION_KEY: ${{ secrets.MASTER_ENCRYPTION_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+          ALERT_TO_NUMBER: ${{ secrets.ALERT_TO_NUMBER }}
+        run: python run.py run-all
+
+      # The SQLite audit log is ephemeral on Actions runners. Alpaca holds the
+      # real position/equity state, so this commit-back is OPTIONAL — it just
+      # preserves the decision/trade history + pending queue between runs.
+      - name: Persist audit log
+        if: always()
+        run: |
+          git config user.name "trading-buddy"
+          git config user.email "bot@users.noreply.github.com"
+          git add -f portfolio.db || true
+          git commit -m "audit log $(date -u +%FT%TZ)" || echo "nothing to commit"
+          git push || echo "push skipped"
