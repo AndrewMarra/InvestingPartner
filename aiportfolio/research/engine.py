@@ -108,3 +108,37 @@ class ResearchEngine:
         if out is None:
             raise RuntimeError("Decision model returned no tool call.")
         return out
+
+    # ── user-initiated consult on a single ticker (advisory / override) ──
+    def consult_briefing(self, symbol: str, intent: str) -> dict:
+        """A focused, portfolio-aware briefing for one symbol."""
+        symbol = symbol.upper()
+        positions = self.market.positions()
+        held = next((p for p in positions if p["symbol"] == symbol), None)
+        return {
+            "symbol": symbol,
+            "intent": intent,
+            "account": self.market.account(),
+            "position": held,  # None if not currently held
+            "technicals": self.market.simple_technicals(symbol),
+            "recent_closes": [b["close"] for b in self.market.recent_bars(symbol, days=30)],
+            "news": self.news.company_news(symbol, days=5, limit=5),
+            "fundamentals": (self.fundamentals.snapshot(symbol)
+                             if self.fundamentals.enabled else {}),
+            "enabled_modes": self.enabled_modes,
+            "short_term_horizon": self.horizon,
+            "options_allowed_underlyings": self.opt_cfg.get("allowed_underlyings", []),
+            "risk_limits": self.cfg["risk"],
+        }
+
+    def consult(self, symbol: str, intent: str = "advisory") -> dict:
+        """Return the buddy's structured take on one ticker (+ an optional trade)."""
+        briefing = self.consult_briefing(symbol, intent)
+        guidance = modes_mod.prompt_guidance(self.enabled_modes, self.horizon)
+        system = prompts.consult_system(guidance, intent)
+        msg = ("Consult request — analyse this ONE ticker and reply via the consult "
+               "tool:\n```json\n" + json.dumps(briefing, indent=2, default=str) + "\n```")
+        out = self._tool_call(self.decision_model, system, prompts.CONSULT_TOOL, msg)
+        if out is None:
+            raise RuntimeError("Consult model returned no tool call.")
+        return out

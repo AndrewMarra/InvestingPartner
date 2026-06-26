@@ -43,6 +43,51 @@ risk/reward — not vibes.
 Return everything via the `submit_decisions` tool."""
 
 
+# One trade idea — shared by the autonomous decision tool and the consult tool so
+# an override flows through exactly the same downstream machinery.
+DECISION_ITEM = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string",
+                 "enum": ["equity_short", "equity_day", "equity_long",
+                          "option_short", "option_long"]},
+        "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
+        "symbol": {"type": "string"},
+        "notional": {"type": "number", "description": "Equity BUY $ amount."},
+        "sell_fraction": {"type": "number", "description": "Equity SELL fraction 0-1."},
+        "underlying": {"type": "string"},
+        "right": {"type": "string", "enum": ["call", "put"]},
+        "strike": {"type": "number"},
+        "zero_dte": {"type": "boolean"},
+        "contracts": {"type": "integer"},
+        "strategy": {"type": "string", "enum": ["single", "vertical"],
+                     "description": "Option structure. 'vertical' = a debit "
+                     "spread (buy strike, sell short_strike) — defined-risk, "
+                     "safer than a naked long option."},
+        "short_strike": {"type": "number",
+                         "description": "For a vertical only: strike of the "
+                         "SOLD leg (same right + expiry as strike)."},
+        "exit_plan": {
+            "type": "object",
+            "description": "REQUIRED for BUY. How/when this trade is closed.",
+            "properties": {
+                "type": {"type": "string",
+                         "enum": ["bracket", "limit", "stop", "time",
+                                  "manual_next_day", "hold"]},
+                "limit_price": {"type": "number"},
+                "stop_price": {"type": "number"},
+                "hold_days": {"type": "integer"},
+                "notes": {"type": "string"},
+            },
+            "required": ["type"],
+        },
+        "confidence": {"type": "number"},
+        "rationale": {"type": "string"},
+    },
+    "required": ["mode", "action", "confidence", "rationale"],
+}
+
+
 DECISION_TOOL = {
     "name": "submit_decisions",
     "description": "Submit this cycle's trade ideas, each with an exit plan.",
@@ -50,44 +95,55 @@ DECISION_TOOL = {
         "type": "object",
         "properties": {
             "market_view": {"type": "string"},
-            "decisions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "mode": {"type": "string",
-                                 "enum": ["equity_short", "equity_day", "equity_long",
-                                          "option_short", "option_long"]},
-                        "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
-                        "symbol": {"type": "string"},
-                        "notional": {"type": "number", "description": "Equity BUY $ amount."},
-                        "sell_fraction": {"type": "number", "description": "Equity SELL fraction 0-1."},
-                        "underlying": {"type": "string"},
-                        "right": {"type": "string", "enum": ["call", "put"]},
-                        "strike": {"type": "number"},
-                        "zero_dte": {"type": "boolean"},
-                        "contracts": {"type": "integer"},
-                        "exit_plan": {
-                            "type": "object",
-                            "description": "REQUIRED for BUY. How/when this trade is closed.",
-                            "properties": {
-                                "type": {"type": "string",
-                                         "enum": ["bracket", "limit", "stop", "time",
-                                                  "manual_next_day", "hold"]},
-                                "limit_price": {"type": "number"},
-                                "stop_price": {"type": "number"},
-                                "hold_days": {"type": "integer"},
-                                "notes": {"type": "string"},
-                            },
-                            "required": ["type"],
-                        },
-                        "confidence": {"type": "number"},
-                        "rationale": {"type": "string"},
-                    },
-                    "required": ["mode", "action", "confidence", "rationale"],
-                },
-            },
+            "decisions": {"type": "array", "items": DECISION_ITEM},
         },
         "required": ["market_view", "decisions"],
+    },
+}
+
+
+# ── Consult pass (user points the buddy at one ticker) ───────────────────
+def consult_system(mode_guidance: str, intent: str) -> str:
+    intents = {
+        "advisory": "ADVISORY: give your honest take only. Do NOT propose a trade "
+                    "(omit `trade`).",
+        "hard_buy": "HARD OVERRIDE: the user wants to buy this. Provide a `trade` "
+                    "with a sensible exit_plan anyway. Still give your honest verdict "
+                    "and set `agree` to whether YOU think it's smart.",
+        "conditional_buy": "CONDITIONAL OVERRIDE: buy ONLY if you genuinely agree it's "
+                           "smart. If you agree, set agree=true and include a `trade` "
+                           "with an exit_plan. If not, set agree=false, OMIT `trade`, "
+                           "and explain why — you can talk the user out of it.",
+    }
+    return f"""You are an AI trading buddy fielding a question about ONE specific \
+ticker. Be portfolio-aware: factor in whether it's already held, at what cost, and \
+the current P&L (all in the briefing).
+
+This request is: {intents.get(intent, intents['advisory'])}
+
+{mode_guidance}
+
+Principles:
+- Be honest, not a yes-man. A good verdict can be 'avoid' even when asked to buy.
+- Any `trade` you include MUST have a valid mode + an exit_plan (no open-ended entries).
+- Never invent prices, tickers, or facts — use only the briefing.
+
+Reply via the `consult` tool."""
+
+
+CONSULT_TOOL = {
+    "name": "consult",
+    "description": "Your take on one ticker, plus an optional trade to act on.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string",
+                        "enum": ["buy", "add", "hold", "trim", "sell", "avoid"]},
+            "agree": {"type": "boolean",
+                      "description": "For conditional buys: do YOU think buying is smart?"},
+            "reasoning": {"type": "string"},
+            "trade": DECISION_ITEM,
+        },
+        "required": ["verdict", "agree", "reasoning"],
     },
 }

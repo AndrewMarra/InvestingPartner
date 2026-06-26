@@ -53,7 +53,14 @@ def prompt_guidance(enabled: list[str], horizon: str) -> str:
         extra = ""
         if meta["horizon"] == "short":
             extra = f" — short-term means: {SHORT_TERM_HORIZONS[horizon]}."
+        elif m == "option_long":
+            extra = " — true LEAPS, expiry ~9-24 months out."
         lines.append(f"  • {m}: {meta['label']}{extra}")
+    if any(MODES[m]["instrument"] == "option" for m in enabled):
+        lines.append(
+            "\nFor options, prefer a DEFINED-RISK debit vertical (strategy='vertical' "
+            "with a short_strike) over a naked long option when you can — it caps the "
+            "premium at risk. Use a single long option only when a spread doesn't fit.")
     lines.append(
         "\nFor every BUY you MUST include an exit_plan so the trade is never "
         "open-ended. Choose the exit that fits the mode:\n"

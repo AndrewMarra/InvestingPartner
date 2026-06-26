@@ -42,6 +42,9 @@ class Notifier:
         if "telegram" in self.channels and self.secrets.telegram_ready:
             if self._telegram(body):
                 delivered = True
+        if "email" in self.channels and self.secrets.email_ready:
+            if self._email(body):
+                delivered = True
         if not delivered:
             print("\n" + "=" * 50 + f"\n📲 {body}\n" + "=" * 50 + "\n")
 
@@ -55,6 +58,23 @@ class Notifier:
             return True
         except Exception as e:
             print(f"[notify] Telegram failed ({e}).")
+            return False
+
+    def _email(self, body) -> bool:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            msg = MIMEText(body)
+            msg["Subject"] = "🤖 Trading Buddy alert"
+            msg["From"] = self.secrets.smtp_from or self.secrets.smtp_user
+            msg["To"] = self.secrets.email_to
+            with smtplib.SMTP(self.secrets.smtp_host, self.secrets.smtp_port or 587, timeout=15) as s:
+                s.starttls()
+                s.login(self.secrets.smtp_user, self.secrets.smtp_pass)
+                s.send_message(msg)
+            return True
+        except Exception as e:
+            print(f"[notify] Email failed ({e}).")
             return False
 
     # ── exit-plan phrasing ───────────────────────────────────────────
@@ -74,18 +94,30 @@ class Notifier:
             return "Exit: long-term hold, no preset sell."
         return "Exit: MANUAL — no auto-sell set; I'll text you when it's time to sell."
 
-    def format_proposal(self, t, lead, price=None, shares=None):
+    def format_proposal(self, t, lead, price=None, shares=None, signals_only=False):
         when = f"in ~{lead} min"
         if t.instrument == "option":
             risk = f", max risk ~${t.est_premium:.0f}" if t.est_premium else ""
+            if getattr(t, "strategy", "single") == "vertical" and getattr(t, "short_strike", 0):
+                legs = f"${t.strike:g}/${t.short_strike:g} {t.right.upper()} vertical"
+            else:
+                legs = f"${t.strike:g} {t.right.upper()}"
             head = (f"🤖 ({t.confidence:.0%}) {t.action} {t.contracts}x {t.underlying} "
-                    f"{t.expiry_label} ${t.strike:g} {t.right.upper()}{risk}")
+                    f"{t.expiry_label} {legs}{risk}")
         else:
             sh = f"~{shares:g} share{'s' if (shares or 0) != 1 else ''}" if shares else ""
             px = f" (~${price:g}/sh, ${t.notional:g} total)" if price else f" (${t.notional:g})"
             head = f"🤖 ({t.confidence:.0%}) {t.action} {sh} {t.symbol}{px}"
         exit_line = self._exit_phrase(t.exit_plan) if t.action == "BUY" else ""
-        return f"{head}. Paper-executing {when}.\n{exit_line}\nWhy: {t.rationale[:170]}"
+        # Signals-only: heads-up just for you; the buddy is not paper-trading it.
+        plan = "Heads-up only — not paper-trading this." if signals_only else f"Paper-executing {when}."
+        return f"{head}. {plan}\n{exit_line}\nWhy: {t.rationale[:170]}"
+
+    def format_consult(self, symbol, verdict, reasoning, intent, agree, acted=False):
+        head = f"🤖 Take on {symbol}: {verdict.upper()}"
+        if intent == "conditional_buy" and not acted:
+            head += f" — I'd {'agree' if agree else 'pass'} on buying"
+        return f"{head}.\nWhy: {reasoning[:220]}"
 
     def format_exit(self, symbol, lead, kind="planned", fraction=1.0, note=""):
         amt = "all shares" if fraction >= 1 else f"{fraction:.0%} of the position"

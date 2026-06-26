@@ -31,21 +31,25 @@ jobs:
 
       # All secrets come from repo Settings -> Secrets and variables -> Actions.
       # NEVER commit real keys. The .env file is gitignored for local use only.
+      #
+      # KEY ISOLATION (important): `run-all` is strictly BYOK. Every user runs with
+      # THEIR OWN keys, decrypted from the database with MASTER_ENCRYPTION_KEY.
+      # The host's personal Alpaca/Anthropic/Finnhub/Twilio keys are deliberately
+      # NOT passed here — that makes it structurally impossible for another user's
+      # cycle to fall back to the host's API keys. Users with no keys are skipped.
+      # (Only the single-user `python run.py once` path reads per-provider env keys.)
       - name: Run one decision cycle for all users
         env:
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-          ALPACA_BASE_URL: https://paper-api.alpaca.markets
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          # Pause the whole worker by setting this secret to "true". Per-user
+          # pausing is done in the dashboard (or `run.py users pause --user ...`).
+          BUDDY_PAUSED: ${{ secrets.BUDDY_PAUSED }}
+          # Decrypts each user's stored BYOK keys. Required.
           MASTER_ENCRYPTION_KEY: ${{ secrets.MASTER_ENCRYPTION_KEY }}
+          # Where the users/keys/settings + audit data live. If DATABASE_URL is
+          # set the worker uses Supabase Postgres (service role); else SQLite.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
-          ALERT_TO_NUMBER: ${{ secrets.ALERT_TO_NUMBER }}
         run: python run.py run-all
 
       # The SQLite audit log is ephemeral on Actions runners. Alpaca holds the

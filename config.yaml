@@ -41,6 +41,9 @@ trading:
   max_trades_per_day: 8
   no_crypto: true
   notify_lead_minutes: 10
+  # Signals-only: the buddy still analyses + texts you its ideas, but never
+  # paper-executes them (nothing is queued or filled). Pure heads-up mode.
+  signals_only: false
 
 research:
   candidate_universe:
@@ -87,7 +90,8 @@ schedule:
 
 notify:
   enabled: true
-  # Per-user in the product; users choose any of: sms | telegram | console.
+  # Per-user in the product; users choose any of: sms | telegram | email | console.
+  # Email needs SMTP_* env vars (single-user) or smtp_* BYOK keys (multi-user).
   channels: [telegram]
   min_confidence_to_notify: 0.6
 
@@ -96,4 +100,8 @@ storage:
 
 benchmark:
   symbol: SPY
+  # "AI vs my portfolio": point this at a CSV of your real holdings
+  # (columns: symbol, quantity, avg_cost) and the return is computed live.
+  # Falls back to the typed personal_return_pct below when unset.
+  personal_csv: null
   personal_return_pct: null

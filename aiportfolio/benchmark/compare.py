@@ -1,6 +1,22 @@
 """Compare the AI portfolio against the S&P 500 and (optionally) your own."""
 from __future__ import annotations
 
+from .personal import personal_return_from_csv
+
+
+def _personal_return(cfg, market):
+    """Prefer a live read of the user's holdings (CSV); fall back to a typed %."""
+    bench = cfg["benchmark"]
+    csv_path = bench.get("personal_csv")
+    if csv_path:
+        try:
+            val = personal_return_from_csv(csv_path, market)
+            if val is not None:
+                return val
+        except Exception:
+            pass
+    return bench.get("personal_return_pct")
+
 
 def performance_report(cfg, store, market) -> dict:
     snaps = store.snapshots()
@@ -19,7 +35,7 @@ def performance_report(cfg, store, market) -> dict:
         (bench_now / bench_start - 1) * 100
         if bench_now and bench_start else None
     )
-    personal = cfg["benchmark"].get("personal_return_pct")
+    personal = _personal_return(cfg, market)
 
     return {
         "ai_equity": round(equity, 2),

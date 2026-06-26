@@ -83,7 +83,12 @@ class Broker:
     def buy_option(self, t):
         if not self.options:
             return {"status": "notify_only", "reason": "options data not configured"}
-        c = self.options.find_contract(t.underlying, t.right, t.strike, t.zero_dte)
+        style = ("leaps" if getattr(t, "mode", "") == "option_long"
+                 else "0dte" if t.zero_dte else "weekly")
+        if getattr(t, "strategy", "single") == "vertical" and getattr(t, "short_strike", 0):
+            return self._buy_vertical(t, style)
+        c = self.options.find_contract(t.underlying, t.right, t.strike, t.zero_dte,
+                                       expiry_style=style)
         if not c:
             return {"status": "notify_only", "reason": "contract not found"}
         try:
@@ -94,6 +99,32 @@ class Broker:
             return res
         except Exception as e:
             return {"status": "notify_only", "reason": str(e), "contract": c["symbol"]}
+
+    def _buy_vertical(self, t, style):
+        """Debit vertical spread: BUY the long leg, SELL the short leg (same expiry,
+        same right). Best-effort multi-leg order; degrades to notify-only on error."""
+        long_c = self.options.find_contract(t.underlying, t.right, t.strike, t.zero_dte,
+                                            expiry_style=style)
+        short_c = self.options.find_contract(t.underlying, t.right, t.short_strike, t.zero_dte,
+                                             expiry_style=style)
+        if not long_c or not short_c or long_c["symbol"] == short_c["symbol"]:
+            return {"status": "notify_only", "reason": "spread legs not found",
+                    "legs": [long_c, short_c]}
+        try:
+            from alpaca.trading.requests import OptionLegRequest
+            from alpaca.trading.enums import OrderClass, PositionIntent
+            legs = [
+                OptionLegRequest(symbol=long_c["symbol"], side=OrderSide.BUY, ratio_qty=1),
+                OptionLegRequest(symbol=short_c["symbol"], side=OrderSide.SELL, ratio_qty=1),
+            ]
+            o = MarketOrderRequest(qty=t.contracts, order_class=OrderClass.MLEG,
+                                   time_in_force=TimeInForce.DAY, legs=legs)
+            res = self._fmt(self.client.submit_order(order_data=o))
+            res["spread"] = f"{long_c['symbol']} / {short_c['symbol']}"
+            return res
+        except Exception as e:
+            return {"status": "notify_only", "reason": f"mleg failed ({e})",
+                    "spread": f"{long_c['symbol']} / {short_c['symbol']}"}
 
     @staticmethod
     def _fmt(o):

@@ -10,7 +10,7 @@ from rich.console import Console
 
 from ..config import load_base_raw
 from ..scheduler.loop import Engine
-from .users import UserStore
+from ..storage.factory import open_user_store
 from .usercfg import build_user_config, validate_user_keys
 
 console = Console()
@@ -18,8 +18,8 @@ console = Console()
 
 def run_all_users(config_path=None, db_path="portfolio.db", force=False) -> dict:
     base = load_base_raw(config_path)
-    store = UserStore(db_path)
-    users = store.list_active()
+    store = open_user_store(db_path)  # Postgres if DATABASE_URL set, else SQLite
+    users = store.list_active()       # active AND not paused-by-user
     console.rule(f"[bold]Multi-user run — {len(users)} active user(s)")
 
     results = {}

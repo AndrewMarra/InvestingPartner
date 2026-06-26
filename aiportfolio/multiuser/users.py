@@ -15,7 +15,7 @@ from . import crypto
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY, email TEXT UNIQUE, phone TEXT,
-    active INTEGER DEFAULT 1, created_at TEXT);
+    active INTEGER DEFAULT 1, paused INTEGER DEFAULT 0, created_at TEXT);
 CREATE TABLE IF NOT EXISTS user_keys (
     user_id TEXT, provider TEXT, ciphertext TEXT,
     PRIMARY KEY (user_id, provider));
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
 KEY_PROVIDERS = [
     "alpaca_key", "alpaca_secret", "anthropic_key", "finnhub_key", "fmp_key",
     "twilio_sid", "twilio_token", "twilio_from", "telegram_token", "telegram_chat_id",
+    "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from", "email_to",
 ]
 
 
@@ -39,7 +40,14 @@ class UserStore:
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        """Add columns introduced after a DB was first created (idempotent)."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "paused" not in cols:
+            self.conn.execute("ALTER TABLE users ADD COLUMN paused INTEGER DEFAULT 0")
 
     def add_user(self, email: str, phone: str) -> str:
         uid = str(uuid.uuid4())
@@ -53,11 +61,23 @@ class UserStore:
         return dict(r) if r else None
 
     def list_active(self) -> list[dict]:
+        """Users the worker should run: active AND not paused by the user."""
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM users WHERE active=1 AND COALESCE(paused,0)=0").fetchall()]
+
+    def list_all(self) -> list[dict]:
+        """Every non-deactivated user, paused or not (for admin/CLI display)."""
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM users WHERE active=1").fetchall()]
 
     def set_active(self, user_id: str, active: bool):
         self.conn.execute("UPDATE users SET active=? WHERE id=?", (1 if active else 0, user_id))
+        self.conn.commit()
+
+    def set_paused(self, user_id: str, paused: bool):
+        """Temporarily suspend (paused=1) or resume (paused=0) a user's cycles.
+        Distinct from active: a paused user is skipped silently but not deleted."""
+        self.conn.execute("UPDATE users SET paused=? WHERE id=?", (1 if paused else 0, user_id))
         self.conn.commit()
 
     # ── encrypted keys ───────────────────────────────────────────────

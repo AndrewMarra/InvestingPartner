@@ -33,6 +33,12 @@ class Secrets:
     alert_to: str | None = None
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_user: str | None = None
+    smtp_pass: str | None = None
+    smtp_from: str | None = None
+    email_to: str | None = None
 
     @property
     def is_paper(self) -> bool:
@@ -45,6 +51,10 @@ class Secrets:
     @property
     def telegram_ready(self) -> bool:
         return all([self.telegram_token, self.telegram_chat_id])
+
+    @property
+    def email_ready(self) -> bool:
+        return all([self.smtp_host, self.smtp_user, self.smtp_pass, self.email_to])
 
 
 @dataclass
@@ -99,5 +109,9 @@ def load_config(path: str | None = None) -> Config:
         twilio_sid=_opt("TWILIO_ACCOUNT_SID"), twilio_token=_opt("TWILIO_AUTH_TOKEN"),
         twilio_from=_opt("TWILIO_FROM_NUMBER"), alert_to=_opt("ALERT_TO_NUMBER"),
         telegram_token=_opt("TELEGRAM_BOT_TOKEN"), telegram_chat_id=_opt("TELEGRAM_CHAT_ID"),
+        smtp_host=_opt("SMTP_HOST"),
+        smtp_port=int(os.environ.get("SMTP_PORT", "587") or 587),
+        smtp_user=_opt("SMTP_USER"), smtp_pass=_opt("SMTP_PASS"),
+        smtp_from=_opt("SMTP_FROM"), email_to=_opt("EMAIL_TO"),
     )
     return Config(raw=raw, secrets=secrets)

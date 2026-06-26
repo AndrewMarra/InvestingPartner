@@ -7,9 +7,12 @@ create table if not exists profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text,
   phone text,
-  active boolean default true,
+  active boolean default true,   -- false = deactivated/deleted
+  paused boolean default false,  -- true  = user temporarily suspended their buddy
   created_at timestamptz default now()
 );
+-- If the table already existed before `paused` was introduced:
+alter table profiles add column if not exists paused boolean default false;
 
 -- ── Encrypted BYOK keys (ciphertext only; encrypt in the worker) ─────
 create table if not exists user_keys (

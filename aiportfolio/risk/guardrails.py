@@ -25,6 +25,8 @@ class ApprovedTrade:
     zero_dte: bool = False
     contracts: int = 0
     est_premium: float | None = None
+    strategy: str = "single"      # single | vertical
+    short_strike: float = 0.0     # the sold leg of a vertical spread
     exit_plan: dict = field(default_factory=dict)
     rationale: str = ""
     confidence: float = 0.0
@@ -74,7 +76,11 @@ class RiskManager:
     def _is_crypto(sym):
         return "/" in sym
 
-    def review(self, decisions, account, positions, trades_today=0, option_quoter=None):
+    def review(self, decisions, account, positions, trades_today=0, option_quoter=None,
+               override_modes=None, bypass_confidence=False):
+        """override_modes: extra modes allowed for THIS call (manual overrides may
+        bypass the enabled-modes gate). bypass_confidence: skip the min-confidence
+        gate (an explicit user override). Hard caps/kill switch always still apply."""
         equity = account["equity"]; cash = account["cash"]
         pos = {p["symbol"]: p for p in positions}
         approved: list[ApprovedTrade] = []
@@ -83,16 +89,18 @@ class RiskManager:
         max_position_val = equity * self.max_position_pct / 100
         cash_floor = equity * self.min_cash_pct / 100
         max_premium = equity * self.max_premium_pct / 100
+        gate = self.enabled_modes if not override_modes else (
+            set(self.enabled_modes) | set(override_modes))
 
         for d in decisions:
             if len(approved) >= self.max_trades_per_run: break
             if trades_today + len(approved) >= self.max_trades_per_day: break
 
             mode = d.get("mode", "equity_short")
-            if mode not in self.enabled_modes:
+            if mode not in gate:
                 continue  # user hasn't enabled this trade style
             action = d.get("action"); conf = float(d.get("confidence", 0))
-            if action == "HOLD" or conf < self.min_confidence:
+            if action == "HOLD" or (conf < self.min_confidence and not bypass_confidence):
                 continue
             instrument = modes_mod.MODES.get(mode, {}).get("instrument", "equity")
             notes = []
@@ -107,23 +115,33 @@ class RiskManager:
                 strike = float(d.get("strike", 0) or 0)
                 contracts = int(d.get("contracts", 1) or 1)
                 if strike <= 0 or contracts < 1: continue
+                strategy = (d.get("strategy") or "single").lower()
+                short_strike = float(d.get("short_strike", 0) or 0)
+                if strategy == "vertical" and short_strike <= 0:
+                    strategy = "single"  # no second leg given → treat as single
                 if contracts > self.max_contracts:
                     notes.append(f"contracts capped at {self.max_contracts}")
                     contracts = self.max_contracts
+                expiry_label = ("LEAPS" if mode == "option_long"
+                                else "0DTE" if zero_dte else "weekly")
                 est_premium = None
                 if option_quoter:
-                    est = option_quoter(underlying, right, strike, zero_dte)
+                    # Long-leg ask is a safe upper bound on a vertical's net debit,
+                    # so capping on it never under-reserves risk for spreads.
+                    est = option_quoter(underlying, right, strike, zero_dte, mode)
                     if est:
                         est_premium = est * 100 * contracts
                         while est_premium > max_premium and contracts > 1:
                             contracts -= 1; est_premium = est * 100 * contracts
                         if est_premium > max_premium:
                             continue
-                        notes.append(f"premium ~${est_premium:.0f} (cap ${max_premium:.0f})")
+                        kind = "net debit ≤" if strategy == "vertical" else "premium ~"
+                        notes.append(f"{kind}${est_premium:.0f} (cap ${max_premium:.0f})")
                 approved.append(ApprovedTrade(action="BUY", instrument="option", mode=mode,
                     underlying=underlying, right=right, strike=strike, contracts=contracts,
-                    zero_dte=zero_dte, expiry_label="0DTE" if zero_dte else "weekly",
-                    est_premium=est_premium, exit_plan=d.get("exit_plan", {}) or {},
+                    zero_dte=zero_dte, expiry_label=expiry_label, strategy=strategy,
+                    short_strike=short_strike, est_premium=est_premium,
+                    exit_plan=d.get("exit_plan", {}) or {},
                     rationale=d.get("rationale", ""), confidence=conf, adjustments=notes))
                 options_used += 1
                 continue

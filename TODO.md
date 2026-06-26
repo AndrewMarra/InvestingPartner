@@ -17,6 +17,7 @@ selected by env. The `run-all` worker then operates on the same data users creat
 in the web app.
 
 **Approach.**
+
 - Add a DB backend abstraction. Keep the current SQLite classes as the
   `sqlite` backend; add a `postgres` backend using `psycopg` (v3).
 - Connection from env: if `DATABASE_URL` (Supabase connection string) is set, use
@@ -34,6 +35,7 @@ in the web app.
 `DATABASE_URL`).
 
 **Gotchas.**
+
 - Keys are encrypted **in the app layer** (Fernet) regardless of backend — the
   DB only ever sees ciphertext. Don't move encryption into Postgres.
 - The web writes user_keys ciphertext via the user's session (RLS "own keys");
@@ -49,7 +51,7 @@ that user and runs their cycle. Tests still pass on SQLite.
 
 ## TICKET 2 — Ticker search & analysis tool (Robinhood-style)
 
-**Why.** Users want to look up *any* ticker and see analytics, not just watch the
+**Why.** Users want to look up _any_ ticker and see analytics, not just watch the
 buddy's watchlist. The Python data layer already supports arbitrary symbols
 (`data/market.simple_technicals` + `recent_bars`, `data/news.company_news`,
 `data/fundamentals.snapshot`), so most plumbing exists.
@@ -59,6 +61,7 @@ a price chart, key technicals, recent headlines, basic fundamentals, and an
 optional on-demand "buddy's take." Read-only — it never places trades.
 
 **Approach (recommended: keep it on the existing free stack).**
+
 - Next.js **route handlers** under `web/app/api/ticker/[symbol]/` that fetch
   directly from Alpaca + Finnhub using the signed-in user's **decrypted BYOK
   keys** (decrypt server-side with the master key, same as key-save). Return
@@ -80,6 +83,7 @@ Trade-off: another deployed service vs. code reuse. Start with the Next.js route
 handlers (free, one deploy) unless reuse pressure grows.
 
 **Gotchas.**
+
 - Rate limits: Finnhub free is ~60/min — cache responses (per symbol, short TTL).
 - Degrade gracefully when a user has no FMP key (skip fundamentals).
 - Validate/normalize the symbol; handle "not found" with a clear empty state.
@@ -101,6 +105,7 @@ check on the user's impulse instead of a pure order-taker.
 **Goal.** Three user-initiated interactions on a chosen ticker, all
 portfolio-aware (the buddy considers whether it's already held, at what cost,
 and the current P&L):
+
 1. **Advisory** — "What's your take on X?" → a read with a verdict
    (buy / add / hold / trim / sell / avoid) + reasoning. No action.
 2. **Hard override** — "I want X, buy it." → the buddy buys it (respecting risk
@@ -110,6 +115,7 @@ and the current P&L):
    its reasoning. If it declines, nothing is queued.
 
 **Approach.**
+
 - Add a `consult(symbol, intent)` path to `research/engine.py` using the decision
   model, where `intent` ∈ {advisory, hard_buy, conditional_buy}. Build a focused
   briefing for that one symbol (price, technicals, news, fundamentals) **plus the
@@ -128,9 +134,10 @@ and the current P&L):
   input.
 
 **Key rules (important).**
+
 - **Hard risk limits ALWAYS apply** — even a hard override goes through
   `risk.review`: position/cash/trade caps, no-crypto, and the daily-loss kill
-  switch all still bind. A user override loosens *gating* (see next point), not
+  switch all still bind. A user override loosens _gating_ (see next point), not
   the safety rails.
 - A manual override MAY bypass triage and the enabled-modes gate (the user asked
   explicitly), but the trade still needs a valid mode tag and an **exit_plan**
@@ -146,6 +153,7 @@ reuses risk+enqueue+notify), a CLI verb (`python run.py consult SYMBOL --intent
 ...`) for testing, and the web explore page (Ticket 2) for the UI.
 
 **Acceptance.**
+
 - "Take on TSLA" returns a portfolio-aware verdict + reasoning, no trade.
 - "Buy TSLA" queues a risk-checked, exit-planned buy with the normal alert.
 - "Buy TSLA only if smart" queues it when the AI agrees, and when it doesn't,
@@ -175,3 +183,11 @@ reuses risk+enqueue+notify), a CLI verb (`python run.py consult SYMBOL --intent
 - **Settings validation** — bound user-supplied risk values server-side so users
   can't loosen their own guardrails to absurd levels.
 - **Integration test** — exercise one full cycle against Alpaca's paper API.
+- **Per-user pause toggle.** Add a `paused` boolean column to the `profiles` table
+  (distinct from `active` — `active=false` means deactivated/deleted, `paused=true`
+  means temporarily suspended by the user's own choice). The `runner.py` already
+  filters on `active=1`; add a second check for `paused=false` so paused users are
+  skipped silently each cycle without being deactivated. Surface as a simple on/off
+  toggle in the dashboard settings page. For the single-user/Actions setup, a
+  `BUDDY_PAUSED` environment secret (set to `"true"` or `"false"` in GitHub →
+  Settings → Secrets) is the stopgap until the Supabase adapter is built.

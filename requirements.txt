@@ -6,3 +6,6 @@ PyYAML>=6.0.2
 python-dotenv>=1.0.1
 rich>=13.7.0
 cryptography>=43.0.0
+# Production DB backend (Supabase Postgres). Only imported when DATABASE_URL is
+# set; local dev + the test suite run on SQLite without it.
+psycopg[binary]>=3.1
