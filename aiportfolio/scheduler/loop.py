@@ -106,6 +106,9 @@ class Engine:
                       f"Pos {len(positions)}  TradesToday {self.store.trades_today()}  "
                       f"DecisionsToday {self.store.decisions_today()}/{self.max_decisions}")
 
+        # 1b) user-initiated consults queued from the web (advisory + overrides)
+        self.process_consults()
+
         # 2) due planned exits -> notify + queue a sell (signals-only: notify only)
         for ex in self.store.due_exits():
             self.notifier.send(self.notifier.format_exit(ex["symbol"], self.lead, "planned"))
@@ -192,6 +195,20 @@ class Engine:
     def _day_drawdown_pct(self, account):
         day_open = self.store.day_open_equity() or account["equity"]
         return (account["equity"] / day_open - 1) * 100 if day_open else 0
+
+    def process_consults(self) -> int:
+        """Drain user-initiated consult requests queued from the web. Each runs
+        through the same risk-checked consult() path; results are stored back."""
+        reqs = self.store.pending_consults()
+        for r in reqs:
+            try:
+                res = self.consult(r["symbol"], r.get("intent") or "advisory")
+            except Exception as e:
+                res = {"symbol": r.get("symbol"), "error": str(e)}
+            self.store.complete_consult(r["id"], res)
+        if reqs:
+            console.print(f"[cyan]Processed {len(reqs)} consult request(s).[/]")
+        return len(reqs)
 
     # ── user-initiated consult / override (Ticket 3) ─────────────────────
     def consult(self, symbol: str, intent: str = "advisory") -> dict:

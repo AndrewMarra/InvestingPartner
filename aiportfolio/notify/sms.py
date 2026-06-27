@@ -64,14 +64,18 @@ class Notifier:
         try:
             import smtplib
             from email.mime.text import MIMEText
+            # EMAIL_TO may be a comma-separated list — alerts go to every address.
+            recipients = [a.strip() for a in (self.secrets.email_to or "").split(",") if a.strip()]
+            if not recipients:
+                return False
             msg = MIMEText(body)
             msg["Subject"] = "🤖 Trading Buddy alert"
             msg["From"] = self.secrets.smtp_from or self.secrets.smtp_user
-            msg["To"] = self.secrets.email_to
+            msg["To"] = ", ".join(recipients)
             with smtplib.SMTP(self.secrets.smtp_host, self.secrets.smtp_port or 587, timeout=15) as s:
                 s.starttls()
                 s.login(self.secrets.smtp_user, self.secrets.smtp_pass)
-                s.send_message(msg)
+                s.send_message(msg, to_addrs=recipients)
             return True
         except Exception as e:
             print(f"[notify] Email failed ({e}).")

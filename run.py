@@ -20,7 +20,13 @@ import argparse
 import json
 from datetime import datetime, timedelta, timezone
 
+from dotenv import load_dotenv
 from rich.console import Console
+
+# Load .env for EVERY CLI path. (Most commands import config.py which also calls
+# this, but `users` doesn't — without it, `DATABASE_URL`/`MASTER_ENCRYPTION_KEY`
+# from .env wouldn't be picked up by the user-management commands.)
+load_dotenv()
 
 console = Console()
 
@@ -174,6 +180,12 @@ def main():
     b.add_argument("--strategy", choices=["momentum","buyhold"], default="momentum")
     b.add_argument("--days", type=int, default=180); b.add_argument("--lookback", type=int, default=20)
     b.add_argument("--top-n", type=int, default=3); b.set_defaults(func=cmd_backtest)
+
+    c = sub.add_parser("consult", help="Ask the buddy about one ticker (advisory or override)")
+    c.add_argument("symbol")
+    c.add_argument("--intent", choices=["advisory", "hard_buy", "conditional_buy"],
+                   default="advisory")
+    c.set_defaults(func=cmd_consult)
 
     sub.add_parser("test-notify", help="Send a test Telegram/SMS message").set_defaults(func=cmd_test_notify)
     ra = sub.add_parser("run-all"); ra.add_argument("--force", action="store_true"); ra.set_defaults(func=cmd_run_all)

@@ -92,7 +92,8 @@ notify:
   enabled: true
   # Per-user in the product; users choose any of: sms | telegram | email | console.
   # Email needs SMTP_* env vars (single-user) or smtp_* BYOK keys (multi-user).
-  channels: [telegram]
+  # (Email is skipped automatically until SMTP_PASS is filled in.)
+  channels: [telegram, email]
   min_confidence_to_notify: 0.6
 
 storage:

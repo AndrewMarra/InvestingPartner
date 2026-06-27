@@ -154,6 +154,20 @@ class PgStore:
             (self.user_id, _now().date()))
         return r["equity"] if r else None
 
+    # consult requests
+    def add_consult_request(self, symbol, intent="advisory"):
+        self._exec("INSERT INTO consult_requests (user_id, ts, symbol, intent) VALUES (%s,%s,%s,%s)",
+                   (self.user_id, _now(), symbol.upper(), intent))
+
+    def pending_consults(self):
+        return self._rows(
+            "SELECT * FROM consult_requests WHERE user_id=%s AND status='pending' ORDER BY id ASC",
+            (self.user_id,))
+
+    def complete_consult(self, cid, result):
+        self._exec("UPDATE consult_requests SET status='done', result=%s WHERE id=%s",
+                   (_json(result), cid))
+
 
 # ── accounts / settings / encrypted BYOK keys ────────────────────────────
 class PgUserStore:

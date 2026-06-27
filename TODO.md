@@ -1,193 +1,87 @@
-# TODO — post-V1 backlog
+# TODO — status
 
-Tickets for Claude Code. The top two are specced in detail; the rest is a
-prioritized backlog so nothing is lost. See CLAUDE.md for architecture context.
-
----
-
-## TICKET 1 (priority) — Worker ↔ Supabase adapter
-
-**Why.** Today the Python worker reads/writes **SQLite** (`portfolio.db`) while
-the Next.js web app reads/writes **Supabase Postgres**. They're two separate
-stores, so a web signup does NOT yet drive the worker. This ticket connects them.
-
-**Goal.** Make `Store` (audit/state) and `UserStore` (accounts/keys/settings)
-backend-pluggable: SQLite for local dev, **Supabase Postgres for production**,
-selected by env. The `run-all` worker then operates on the same data users create
-in the web app.
-
-**Approach.**
-
-- Add a DB backend abstraction. Keep the current SQLite classes as the
-  `sqlite` backend; add a `postgres` backend using `psycopg` (v3).
-- Connection from env: if `DATABASE_URL` (Supabase connection string) is set, use
-  Postgres; else SQLite (`storage.db_path`). The worker connects with the
-  **service-role** Postgres role (bypasses RLS — it acts for all users).
-- The schema already exists in `supabase/schema.sql` and mirrors the SQLite
-  tables 1:1, so only the SQL dialect/driver differs (placeholders `%s` vs `?`,
-  `jsonb` vs TEXT, `serial` vs AUTOINCREMENT). Consider a tiny query-translation
-  shim or just two implementations behind one interface.
-- `multiuser/runner.py` already iterates `UserStore.list_active()` and builds
-  per-user configs — only the store construction changes.
-
-**Files.** `storage/db.py`, `multiuser/users.py`, new `storage/backend.py` (or
-`multiuser/db.py`), `requirements.txt` (+`psycopg[binary]`), `config.py` (read
-`DATABASE_URL`).
-
-**Gotchas.**
-
-- Keys are encrypted **in the app layer** (Fernet) regardless of backend — the
-  DB only ever sees ciphertext. Don't move encryption into Postgres.
-- The web writes user_keys ciphertext via the user's session (RLS "own keys");
-  the worker reads it via service role. Both must use the SAME
-  `MASTER_ENCRYPTION_KEY`.
-- Keep SQLite working for local dev and the test suite (tests assume SQLite).
-
-**Acceptance.** Create a user + keys + settings through the web app; run
-`python run.py run-all` against the same Supabase project; the worker picks up
-that user and runs their cycle. Tests still pass on SQLite.
+The post-V1 backlog has been implemented. This file now records WHAT shipped and
+WHERE it lives, plus the handful of items deliberately left for later. See
+DECISIONS.md for the "why" and CLAUDE.md for architecture.
 
 ---
 
-## TICKET 2 — Ticker search & analysis tool (Robinhood-style)
+## ✅ Shipped
 
-**Why.** Users want to look up _any_ ticker and see analytics, not just watch the
-buddy's watchlist. The Python data layer already supports arbitrary symbols
-(`data/market.simple_technicals` + `recent_bars`, `data/news.company_news`,
-`data/fundamentals.snapshot`), so most plumbing exists.
+### Priority — per-user pause + key isolation (user request)
+- **Per-user pause.** `paused` flag on users/`profiles` (distinct from `active`),
+  with an auto-migration for old SQLite DBs. `UserStore.list_active()` skips
+  paused users; `list_all()` still shows them. CLI: `run.py users pause/resume
+  --user <id>`. Web: a "Buddy is running / paused" toggle in dashboard settings.
+  Files: `multiuser/users.py`, `storage/postgres.py`, `web/.../SettingsForm.tsx`,
+  `web/app/actions.ts` (`setPaused`), `supabase/schema.sql`.
+- **Global pause.** `BUDDY_PAUSED=true` stops every cycle (single- and
+  multi-user). Wired in `run.py` (`_globally_paused`) and `trade.yml`.
+- **Key isolation.** `run-all` is strictly BYOK — `build_user_config` builds
+  secrets ONLY from a user's own decrypted keys (no env fallback), and the
+  host's per-provider API keys were removed from the `trade.yml` `run-all` step,
+  so another user's cycle can never use them. Covered by tests.
 
-**Goal.** A `/dashboard/explore` page: search a ticker → see price + day change,
-a price chart, key technicals, recent headlines, basic fundamentals, and an
-optional on-demand "buddy's take." Read-only — it never places trades.
+### Ticket 1 — Worker ↔ Supabase/Postgres adapter
+- Backend chosen by env: `DATABASE_URL` set → Postgres (`storage/postgres.py`,
+  `psycopg` v3, service role), else SQLite. Selected via `storage/factory.py`
+  (`open_store` / `open_user_store`), used by the loop, runner, and CLI. SQLite
+  stays the default for local dev + tests. `psycopg[binary]` added to requirements.
 
-**Approach (recommended: keep it on the existing free stack).**
+### Ticket 2 — Ticker explore page (Robinhood-style)
+- `/dashboard/explore`: search any ticker → price + day change, price chart
+  (reuses `EquityChart`), technicals (SMA10/30, trend, 5-day move), headlines,
+  fundamentals (if FMP set). Read-only.
+- Next.js route handler `app/api/ticker/[symbol]` fetches Alpaca + Finnhub (+FMP)
+  using the user's decrypted BYOK keys (`lib/keys.ts` + new `fernetDecrypt`),
+  with a short per-symbol cache. "Add to watchlist" appends to the user's
+  `research.candidate_universe`.
 
-- Next.js **route handlers** under `web/app/api/ticker/[symbol]/` that fetch
-  directly from Alpaca + Finnhub using the signed-in user's **decrypted BYOK
-  keys** (decrypt server-side with the master key, same as key-save). Return
-  `{ quote, bars, technicals, news, fundamentals }`.
-  - Mirror `simple_technicals` logic (SMA10/30, trend, 5-day move) in TS, or
-    expose it from a small Python endpoint if you'd rather reuse the code (see
-    alternative below).
-- Reuse `EquityChart` styling for the price chart (feed it close prices).
-- "Get the buddy's take" button → a route handler that runs a **single** Anthropic
-  call (Sonnet) summarizing the ticker from the fetched data. This is a read, not
-  a trade — do NOT route it through the trading decision/execution path.
-- "Add to watchlist" → append the symbol to the user's
-  `settings.research.candidate_universe` so the buddy starts considering it.
+### Ticket 3 — Buddy's take + manual override (consult)
+- `research/engine.consult(symbol, intent)` + `scheduler/loop.consult(...)`,
+  `intent ∈ {advisory, hard_buy, conditional_buy}`, portfolio-aware. Overrides
+  reuse the SAME `risk.review` → enqueue → notify path (hard caps + kill switch
+  always bind; overrides may bypass the enabled-modes gate + min-confidence).
+  CLI: `run.py consult SYMBOL --intent ...`.
+- Web: advisory take is an instant read-only Anthropic call (`lib/buddy.ts`,
+  `app/api/consult`); acting overrides are queued to `consult_requests` and
+  processed by the **risk-checked worker** (`Engine.process_consults`) — never a
+  direct order from the browser.
 
-**Alternative architecture.** If you'd rather not reimplement data logic in TS,
-stand up a small read-only Python service (FastAPI) exposing
-`/ticker/{symbol}` that reuses `aiportfolio/data`, and have the frontend call it.
-Trade-off: another deployed service vs. code reuse. Start with the Next.js route
-handlers (free, one deploy) unless reuse pressure grows.
-
-**Gotchas.**
-
-- Rate limits: Finnhub free is ~60/min — cache responses (per symbol, short TTL).
-- Degrade gracefully when a user has no FMP key (skip fundamentals).
-- Validate/normalize the symbol; handle "not found" with a clear empty state.
-- Keep it strictly read-only — no order placement from this surface.
-
-**Acceptance.** A signed-in user searches any valid US ticker and sees
-price/chart/technicals/news (and fundamentals if FMP is set), can optionally get
-an AI take, and can add the ticker to their watchlist — with zero trades placed.
-
----
-
-## TICKET 3 — "Buddy's take" + manual override (user-initiated requests)
-
-**Why.** Users want to point the buddy at a specific stock and either get its
-read or direct it to act — including a conditional "buy this, but only if you
-also think it's smart." That last one is the valuable pattern: the AI acts as a
-check on the user's impulse instead of a pure order-taker.
-
-**Goal.** Three user-initiated interactions on a chosen ticker, all
-portfolio-aware (the buddy considers whether it's already held, at what cost,
-and the current P&L):
-
-1. **Advisory** — "What's your take on X?" → a read with a verdict
-   (buy / add / hold / trim / sell / avoid) + reasoning. No action.
-2. **Hard override** — "I want X, buy it." → the buddy buys it (respecting risk
-   limits), and still attaches a sensible exit plan.
-3. **Conditional override** — "Buy X, but only if you also think it's smart." →
-   the buddy evaluates and acts ONLY if it agrees; either way it tells the user
-   its reasoning. If it declines, nothing is queued.
-
-**Approach.**
-
-- Add a `consult(symbol, intent)` path to `research/engine.py` using the decision
-  model, where `intent` ∈ {advisory, hard_buy, conditional_buy}. Build a focused
-  briefing for that one symbol (price, technicals, news, fundamentals) **plus the
-  user's current position in it** (held?, qty, avg cost, unrealized P&L) so the
-  take is portfolio-aware.
-- New structured output (a `consult` tool) returning: `verdict`, `agree` (bool,
-  for conditional), `reasoning`, and — when it will act — the SAME decision
-  fields an autonomous idea produces (`mode`, `notional`, `exit_plan`,
-  `confidence`, `rationale`) so it flows through the existing machinery unchanged.
-- **Reuse, don't fork, the action path:** when the buddy will act (hard override,
-  or conditional where `agree=true`), run the proposed trade through
-  `risk.review()` and the normal enqueue → notify (~10-min) → execute flow. The
-  user gets the same detailed "buying ~N shares, exit plan…" text.
-- Surface it on the ticker explorer (Ticket 2): a "Get the buddy's take" button
-  (advisory) and a prompt/box for override requests. Could also be a small chat
-  input.
-
-**Key rules (important).**
-
-- **Hard risk limits ALWAYS apply** — even a hard override goes through
-  `risk.review`: position/cash/trade caps, no-crypto, and the daily-loss kill
-  switch all still bind. A user override loosens _gating_ (see next point), not
-  the safety rails.
-- A manual override MAY bypass triage and the enabled-modes gate (the user asked
-  explicitly), but the trade still needs a valid mode tag and an **exit_plan**
-  (the no-open-ended-entries invariant holds).
-- For `conditional_buy`, if `agree=false`, queue nothing and just return the
-  reasoning — the whole point is the AI can talk the user out of it.
-- Log consults (and their verdicts) to the audit trail alongside autonomous
-  decisions, so the record shows who initiated what.
-
-**Files.** `research/engine.py` (+`consult`), `research/prompts.py` (consult
-tool + system text), `scheduler/loop.py` (a `consult`/`override` entry point that
-reuses risk+enqueue+notify), a CLI verb (`python run.py consult SYMBOL --intent
-...`) for testing, and the web explore page (Ticket 2) for the UI.
-
-**Acceptance.**
-
-- "Take on TSLA" returns a portfolio-aware verdict + reasoning, no trade.
-- "Buy TSLA" queues a risk-checked, exit-planned buy with the normal alert.
-- "Buy TSLA only if smart" queues it when the AI agrees, and when it doesn't,
-  places nothing and explains why.
-- All three respect risk caps and the kill switch; all are logged.
+### Backlog
+- **Per-user pause toggle** — see Priority above.
+- **Personal-portfolio comparison** — `benchmark/personal.py` computes your real
+  return from a holdings CSV (`benchmark.personal_csv`); falls back to the typed
+  `personal_return_pct`.
+- **Option vertical spreads (multi-leg)** — `strategy:"vertical"` + `short_strike`
+  in the decision/consult schema, risk handling, and a best-effort MLEG order in
+  `execution/broker._buy_vertical` (degrades to notify-only).
+- **True LEAPS expiry** — `data/options._expiry_window("leaps")` scans ~9–24 months
+  and picks the farthest near-strike contract; `option_long` labels as LEAPS.
+- **Option P&L tracking** — `OptionsData.position_marks` (mid-price marks for held
+  contracts), surfaced in `run.py status` (best-effort; Alpaca already returns
+  option position P&L).
+- **Per-user starting capital** — `portfolio` is now overridable (bounded) and
+  surfaced in settings.
+- **Signals-only mode** — `trading.signals_only`: analyse + alert, never execute.
+  Wired through the whole loop + consult; toggle in settings.
+- **Email channel** — SMTP added to `notify/sms.py` (+ `Secrets`, BYOK providers,
+  Keys page); enable via `notify.channels: [..., email]`.
+- **Settings validation** — `usercfg.clamp_settings` bounds risk-relevant numbers
+  server-side so users can't loosen their own guardrails to absurd levels.
+- **Integration test** — `tests/test_consult.py` drives a full consult/override
+  cycle (risk + store + notifier) with a faked market + model.
 
 ---
 
-## Backlog (smaller / later)
-
-- **Personal-portfolio comparison (original goal).** Replace the manually-typed
-  `benchmark.personal_return_pct` with an actual read of the user's real holdings
-  (e.g., a read-only brokerage connection or a positions CSV import) so "AI vs my
-  portfolio" is automatic.
-- **Option spreads (multi-leg)** — verticals/iron condors; safer than naked 0DTE.
-  Extend `execution/broker.py` + the decision schema.
-- **True LEAPS expiry selection** for `option_long` — `data/options._next_expiry`
-  currently only does 0DTE / nearest-weekly.
-- **Option P&L tracking** — needs an options data plan (quotes for held contracts).
-- **Per-user starting capital** — add `portfolio` to `usercfg.ALLOWED_OVERRIDES`
-  and surface it in settings; reconcile with the Alpaca paper account balance
-  (Alpaca paper defaults to $100k — document or auto-set).
-- **"Signals-only" mode** — notify but never paper-execute, per user.
-- **Email / web-push channels** — extend `notify/sms.py` (currently SMS+Telegram).
-- **Secrets hardening** — move `MASTER_ENCRYPTION_KEY` to a managed secrets store;
-  add a key-rotation plan; document the BYOK trust model in a privacy policy.
-- **Settings validation** — bound user-supplied risk values server-side so users
-  can't loosen their own guardrails to absurd levels.
-- **Integration test** — exercise one full cycle against Alpaca's paper API.
-- **Per-user pause toggle.** Add a `paused` boolean column to the `profiles` table
-  (distinct from `active` — `active=false` means deactivated/deleted, `paused=true`
-  means temporarily suspended by the user's own choice). The `runner.py` already
-  filters on `active=1`; add a second check for `paused=false` so paused users are
-  skipped silently each cycle without being deactivated. Surface as a simple on/off
-  toggle in the dashboard settings page. For the single-user/Actions setup, a
-  `BUDDY_PAUSED` environment secret (set to `"true"` or `"false"` in GitHub →
-  Settings → Secrets) is the stopgap until the Supabase adapter is built.
+## Still future (deliberately deferred)
+- **More multi-leg options** — iron condors / calendars (only debit verticals ship).
+- **Web-push notifications** — SMS, Telegram, and email ship; web-push is the next
+  channel (extend `notify/sms.py` + a service worker).
+- **Secrets hardening** — `MASTER_ENCRYPTION_KEY` still lives in env/Actions
+  secrets; a managed secret store + automated key-rotation plan remain future.
+- **Live brokerage import for personal comparison** — currently a CSV; a read-only
+  brokerage connection would make it fully automatic.
+- **Real options P&L data plan** — accurate held-contract P&L needs an options
+  data subscription.
+- **Paper-cycle integration test against Alpaca's live paper API** (network-gated).

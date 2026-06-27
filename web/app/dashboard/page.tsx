@@ -2,16 +2,16 @@ import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import { BuddyMessage } from "@/components/BuddyMessage";
 import { EquityChart } from "@/components/EquityChart";
+import { Watchlist } from "@/components/Watchlist";
 
 export default async function Overview() {
   const supabase = supabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
 
-  const [{ data: trades }, { data: snaps }, { data: profile }, { data: settings }, { data: keys }] =
+  const [{ data: trades }, { data: snaps }, { data: settings }, { data: keys }] =
     await Promise.all([
       supabase.from("trades").select("*").order("id", { ascending: false }).limit(8),
       supabase.from("snapshots").select("equity").order("id", { ascending: true }),
-      supabase.from("profiles").select("phone").eq("id", user!.id).maybeSingle(),
       supabase.from("user_settings").select("settings").eq("user_id", user!.id).maybeSingle(),
       supabase.from("user_keys").select("provider").eq("user_id", user!.id),
     ]);
@@ -25,7 +25,6 @@ export default async function Overview() {
   const required = ["alpaca_key", "alpaca_secret", "anthropic_key", "finnhub_key"];
   const steps = [
     { done: required.every((r) => haveKeys.has(r)), label: "Add your API keys", href: "/dashboard/keys" },
-    { done: !!profile?.phone, label: "Add your phone for alerts", href: "/dashboard/keys" },
     { done: !!settings?.settings?.modes?.enabled?.length, label: "Choose your trade styles", href: "/dashboard/settings" },
   ];
   const ready = steps.every((s) => s.done);
@@ -58,6 +57,8 @@ export default async function Overview() {
         </div>
         <div style={{ marginTop: 16 }}><EquityChart values={equity} /></div>
       </section>
+
+      <Watchlist initial={settings?.settings?.research?.candidate_universe ?? []} />
 
       <section className="section">
         <h2>Recent messages</h2>

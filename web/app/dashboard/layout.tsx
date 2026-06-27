@@ -10,6 +10,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <Link href="/dashboard" className="brand">trading<b>buddy</b></Link>
         <div className="navlinks">
           <Link href="/dashboard">Overview</Link>
+          <Link href="/dashboard/explore">Explore</Link>
           <Link href="/dashboard/settings">Trade styles</Link>
           <Link href="/dashboard/keys">Keys &amp; alerts</Link>
           <SignOutButton />

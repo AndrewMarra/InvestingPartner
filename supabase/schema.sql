@@ -44,6 +44,12 @@ create table if not exists planned_exits (
 create table if not exists snapshots (
   id bigserial primary key, user_id uuid, ts timestamptz, date date, equity real,
   cash real, benchmark_price real);
+-- User-initiated "ask the buddy about a ticker" requests. The web inserts a row;
+-- the risk-checked worker processes it (advisory = no trade; overrides go through
+-- the SAME risk.review as autonomous ideas — never a direct order from the web).
+create table if not exists consult_requests (
+  id bigserial primary key, user_id uuid, ts timestamptz default now(), symbol text,
+  intent text default 'advisory', status text default 'pending', result jsonb);
 
 -- ── Row-level security: each user sees only their own rows ───────────
 alter table profiles       enable row level security;
@@ -52,6 +58,7 @@ alter table user_settings  enable row level security;
 alter table decisions      enable row level security;
 alter table trades         enable row level security;
 alter table snapshots      enable row level security;
+alter table consult_requests enable row level security;
 -- These are worker-only (written via the service-role key, which bypasses RLS).
 -- Enabling RLS with NO policy denies all anon/authenticated access — exactly
 -- what we want, so they're never exposed through the public API.
@@ -64,6 +71,10 @@ create policy "own settings" on user_settings for all using (auth.uid() = user_i
 create policy "own decisions" on decisions    for select using (auth.uid() = user_id);
 create policy "own trades"   on trades        for select using (auth.uid() = user_id);
 create policy "own snapshots" on snapshots    for select using (auth.uid() = user_id);
+-- Users may create + read their own consult requests; the worker (service role)
+-- updates status/result. No update policy = users can't mark their own as done.
+create policy "own consults insert" on consult_requests for insert with check (auth.uid() = user_id);
+create policy "own consults select" on consult_requests for select using (auth.uid() = user_id);
 
 -- NOTE: the polling worker uses the service-role key (bypasses RLS) to write
 -- trades/decisions for all users. The frontend uses the anon key, so RLS keeps

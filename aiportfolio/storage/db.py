@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS planned_exits (
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ts TEXT, date TEXT, equity REAL,
     cash REAL, benchmark_price REAL);
+CREATE TABLE IF NOT EXISTS consult_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ts TEXT, symbol TEXT,
+    intent TEXT, status TEXT DEFAULT 'pending', result TEXT);
 """
 
 
@@ -127,3 +130,18 @@ class Store:
             "SELECT equity FROM snapshots WHERE user_id=? AND date=? ORDER BY id ASC LIMIT 1",
             (self.user_id, d)).fetchone()
         return r["equity"] if r else None
+
+    # consult requests (web → worker: user asks the buddy about a ticker)
+    def add_consult_request(self, symbol, intent="advisory"):
+        self.conn.execute(
+            "INSERT INTO consult_requests (user_id, ts, symbol, intent) VALUES (?,?,?,?)",
+            (self.user_id, _now().isoformat(), symbol.upper(), intent)); self.conn.commit()
+
+    def pending_consults(self):
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM consult_requests WHERE user_id=? AND status='pending' ORDER BY id ASC",
+            (self.user_id,)).fetchall()]
+
+    def complete_consult(self, cid, result):
+        self.conn.execute("UPDATE consult_requests SET status='done', result=? WHERE id=?",
+                          (json.dumps(result, default=str), cid)); self.conn.commit()

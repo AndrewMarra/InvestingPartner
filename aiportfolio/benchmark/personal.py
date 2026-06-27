@@ -15,14 +15,19 @@ import csv
 from pathlib import Path
 
 
+def _norm(key: str) -> str:
+    """Normalise a header so 'Avg Price' / 'avg_price' / 'Average  Price' all match."""
+    return "_".join((key or "").strip().lower().split())
+
+
 def _f(row: dict, *names) -> float | None:
-    for n in names:
-        for k, v in row.items():
-            if k and k.strip().lower() == n and str(v).strip() != "":
-                try:
-                    return float(str(v).replace("$", "").replace(",", ""))
-                except ValueError:
-                    return None
+    wanted = set(names)
+    for k, v in row.items():
+        if _norm(k) in wanted and str(v).strip() != "":
+            try:
+                return float(str(v).replace("$", "").replace(",", ""))
+            except ValueError:
+                return None
     return None
 
 
@@ -34,9 +39,9 @@ def load_positions(csv_path: str) -> list[dict]:
     with path.open(newline="", encoding="utf-8-sig") as f:  # tolerate a BOM
         for row in csv.DictReader(f):
             sym = next((str(v).strip().upper() for k, v in row.items()
-                        if k and k.strip().lower() == "symbol" and str(v).strip()), None)
+                        if _norm(k) in {"symbol", "ticker"} and str(v).strip()), None)
             qty = _f(row, "quantity", "qty", "shares")
-            cost = _f(row, "avg_cost", "cost", "avg_price", "price")
+            cost = _f(row, "avg_cost", "cost", "avg_price", "price", "average_cost", "average_price")
             if sym and qty and cost:
                 out.append({"symbol": sym, "quantity": qty, "avg_cost": cost})
     return out
