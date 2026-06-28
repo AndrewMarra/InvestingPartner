@@ -22,6 +22,8 @@ from ..data.market import MarketData
 from ..data.news import NewsFeed
 from ..data.fundamentals import Fundamentals
 from ..data.options import OptionsData
+from ..data.earnings import EarningsData
+from ..data.macro import MacroData
 from ..research.engine import ResearchEngine
 from ..risk.guardrails import RiskManager, ApprovedTrade
 from ..execution.broker import Broker
@@ -42,7 +44,10 @@ class Engine:
         self.news = NewsFeed(s)
         self.funds = Fundamentals(s)
         self.options = OptionsData(s) if (self.cfg.get("options", {}) or {}).get("enabled") else None
-        self.research = ResearchEngine(s, self.cfg, self.market, self.news, self.funds, self.options)
+        self.earnings = EarningsData(s) if s.finnhub_key else None
+        self.macro = MacroData(s, market=self.market) if s.finnhub_key else None
+        self.research = ResearchEngine(s, self.cfg, self.market, self.news, self.funds,
+                                       self.options, earnings=self.earnings, macro=self.macro)
         self.risk = RiskManager(self.cfg)
         self.broker = Broker(s, self.options)
         self.store = open_store(self.cfg["storage"]["db_path"], user_id=user_id)

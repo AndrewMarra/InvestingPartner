@@ -18,13 +18,16 @@ from .. import modes as modes_mod
 
 
 class ResearchEngine:
-    def __init__(self, secrets, cfg, market, news, fundamentals, options=None):
+    def __init__(self, secrets, cfg, market, news, fundamentals, options=None,
+                 earnings=None, macro=None):
         self.client = Anthropic(api_key=secrets.anthropic_key)
         self.cfg = cfg
         self.market = market
         self.news = news
         self.fundamentals = fundamentals
         self.options = options
+        self.earnings = earnings
+        self.macro = macro
         mc = cfg["models"]
         self.decision_model = mc["decision_model"]
         self.triage_model = mc["triage_model"]
@@ -36,7 +39,7 @@ class ResearchEngine:
         self.enabled_modes, self.horizon = modes_mod.normalize(cfg)
         self.instruments = modes_mod.enabled_instruments(self.enabled_modes)
 
-    # ── shared model helper ──────────────────────────────────────────
+    # ── shared model helper (triage + consult) ───────────────────────
     def _tool_call(self, model, system, tool, user_msg):
         resp = self.client.messages.create(
             model=model, max_tokens=self.max_tokens, temperature=self.temperature,
@@ -46,6 +49,41 @@ class ResearchEngine:
         for b in resp.content:
             if getattr(b, "type", None) == "tool_use" and b.name == tool["name"]:
                 return b.input
+        return None
+
+    # ── agentic decision call with optional web search ───────────────
+    def _decide_call(self, system: str, user_msg: str) -> dict | None:
+        """Run the decision model. Claude may call web_search freely before
+        ultimately calling submit_decisions. Handles up to 5 turns."""
+        tools = [
+            prompts.DECISION_TOOL,
+            {"type": "web_search_20250305", "name": "web_search"},
+        ]
+        messages = [{"role": "user", "content": user_msg}]
+        for _ in range(5):
+            resp = self.client.messages.create(
+                model=self.decision_model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                system=system,
+                tools=tools,
+                tool_choice={"type": "any"},
+                messages=messages,
+            )
+            for b in resp.content:
+                if getattr(b, "type", None) == "tool_use" and b.name == "submit_decisions":
+                    return b.input
+            # Claude called web_search (or something else) — continue conversation.
+            messages.append({"role": "assistant", "content": resp.content})
+            tool_results = [
+                {"type": "tool_result", "tool_use_id": b.id, "content": "Done."}
+                for b in resp.content
+                if getattr(b, "type", None) == "tool_use"
+                and b.name != "submit_decisions"
+            ]
+            if not tool_results:
+                break
+            messages.append({"role": "user", "content": tool_results})
         return None
 
     # ── cheap triage ─────────────────────────────────────────────────
@@ -77,6 +115,10 @@ class ResearchEngine:
             pool = (set(focus) & pool) | held or pool
         symbols = sorted(pool)
 
+        # focus_syms: triage watch list + held — gets enriched data.
+        # All other symbols get just headlines + technicals (cheap).
+        focus_syms = sorted((set(focus) if focus else set()) | held)
+
         news = {s: self.news.company_news(s, days=2, limit=3) for s in symbols}
         technicals = {s: self.market.simple_technicals(s) for s in symbols}
         funds = ({s: self.fundamentals.snapshot(s) for s in symbols}
@@ -88,6 +130,34 @@ class ResearchEngine:
             spot = self.market.latest_prices(unders)
             options_snapshot = self.options.snapshot_for_prompt(unders, spot)
 
+        # ── enriched data — only for triage watch + held (rate-limit aware) ──
+        earnings_upcoming: list[dict] = []
+        earnings_history: dict = {}
+        insider: dict = {}
+        sec: dict = {}
+        if self.earnings:
+            earnings_upcoming = self.earnings.upcoming(symbols)
+            for s in focus_syms:
+                h = self.earnings.history(s)
+                if h:
+                    earnings_history[s] = h
+
+        if focus_syms:
+            for s in focus_syms:
+                sent = self.news.insider_sentiment(s)
+                if sent:
+                    insider[s] = sent
+                fil = self.news.sec_filings(s)
+                if fil:
+                    sec[s] = fil
+
+        macro: dict = {}
+        if self.macro:
+            macro = {
+                "upcoming_events": self.macro.economic_calendar(),
+                "vix": self.macro.vix(),
+            }
+
         return {
             "account": account, "positions": positions,
             "enabled_modes": self.enabled_modes, "short_term_horizon": self.horizon,
@@ -95,6 +165,10 @@ class ResearchEngine:
             "market_news": self.news.market_news(limit=5),
             "company_news": news, "technicals": technicals, "fundamentals": funds,
             "options_chain_0dte": options_snapshot,
+            "earnings": {"upcoming": earnings_upcoming, "history": earnings_history},
+            "insider_sentiment": insider,
+            "sec_filings": sec,
+            "macro": macro,
             "risk_limits": self.cfg["risk"],
         }
 
@@ -104,9 +178,9 @@ class ResearchEngine:
         msg = ("Briefing — surface your best idea(s) via submit_decisions "
                "(HOLD/empty is fine):\n```json\n"
                + json.dumps(briefing, indent=2, default=str) + "\n```")
-        out = self._tool_call(self.decision_model, system, prompts.DECISION_TOOL, msg)
+        out = self._decide_call(system, msg)
         if out is None:
-            raise RuntimeError("Decision model returned no tool call.")
+            raise RuntimeError("Decision model returned no submit_decisions tool call.")
         return out
 
     # ── user-initiated consult on a single ticker (advisory / override) ──

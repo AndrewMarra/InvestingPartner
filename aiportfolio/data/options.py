@@ -133,8 +133,42 @@ class OptionsData:
         except Exception:
             return None
 
+    def _snapshot_with_greeks(self, occ_symbol: str) -> dict:
+        """Bid/ask + Greeks from the Alpaca option snapshot endpoint.
+        Falls back to a basic quote if the snapshot endpoint isn't available."""
+        try:
+            from alpaca.data.requests import OptionSnapshotRequest
+            req = OptionSnapshotRequest(symbol_or_symbols=occ_symbol)
+            raw = self._data_client().get_option_snapshot(req)
+            # alpaca-py returns a BarSet-like object; unwrap to the model
+            snap = raw.get(occ_symbol) if hasattr(raw, "get") else None
+            if snap is None and hasattr(raw, "data"):
+                snap = raw.data.get(occ_symbol)
+            if snap is None:
+                return self.quote(occ_symbol) or {}
+
+            def _f(obj, attr):
+                v = getattr(obj, attr, None)
+                return round(float(v), 4) if v is not None else None
+
+            g = getattr(snap, "greeks", None)
+            q = getattr(snap, "latest_quote", None)
+            result: dict = {}
+            if q:
+                result["bid"] = _f(q, "bid_price")
+                result["ask"] = _f(q, "ask_price")
+            if g:
+                result["delta"] = _f(g, "delta")
+                result["gamma"] = _f(g, "gamma")
+                result["theta"] = _f(g, "theta")
+                result["vega"] = _f(g, "vega")
+                result["iv"] = _f(g, "implied_volatility")
+            return result or (self.quote(occ_symbol) or {})
+        except Exception:
+            return self.quote(occ_symbol) or {}
+
     def snapshot_for_prompt(self, underlyings: list[str], spot: dict) -> dict:
-        """A tiny chain summary the AI can reason over (ATM-ish strikes)."""
+        """ATM chain summary including Greeks for the AI to reason over."""
         out = {}
         for u in underlyings:
             px = spot.get(u)
@@ -145,8 +179,13 @@ class OptionsData:
             for right in ("call", "put"):
                 c = self.find_contract(u, right, atm, zero_dte=True)
                 if c:
-                    qt = self.quote(c["symbol"]) or {}
-                    row[right] = {"strike": c["strike"], "expiry": c["expiry"],
-                                  "ask": qt.get("ask"), "bid": qt.get("bid")}
+                    qt = self._snapshot_with_greeks(c["symbol"])
+                    row[right] = {
+                        "strike": c["strike"], "expiry": c["expiry"],
+                        "ask": qt.get("ask"), "bid": qt.get("bid"),
+                        "delta": qt.get("delta"), "gamma": qt.get("gamma"),
+                        "theta": qt.get("theta"), "vega": qt.get("vega"),
+                        "iv": qt.get("iv"),
+                    }
             out[u] = {"spot": px, "atm_0dte": row}
         return out
