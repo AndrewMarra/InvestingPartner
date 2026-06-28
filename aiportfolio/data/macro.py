@@ -17,11 +17,13 @@ class MacroData:
         return self._client
 
     def economic_calendar(self, days: int = 7) -> list[dict]:
-        """High/medium-impact macro events in the next N days (Fed, CPI, jobs, GDP)."""
+        """High/medium-impact macro events in the next N days (Fed, CPI, jobs, GDP).
+        Note: Finnhub's economic calendar is a premium endpoint — on the free
+        tier this 403s and degrades to an empty list (handled below)."""
         try:
             frm = date.today().isoformat()
             to = (date.today() + timedelta(days=days)).isoformat()
-            res = self._cli().economic_calendar()
+            res = self._cli().calendar_economic()
             items = res.get("economicCalendar", []) if isinstance(res, dict) else []
             out = []
             for it in items:
@@ -42,12 +44,16 @@ class MacroData:
             return []
 
     def vix(self) -> dict:
-        """VIX level + plain-English interpretation. Returns {} if unavailable."""
+        """VIX level + plain-English interpretation. Returns {} if unavailable.
+
+        Uses the real ^VIX index, which is only quoted on some Alpaca plans —
+        when it isn't, we omit VIX entirely rather than substitute a VIX-futures
+        ETF (e.g. VIXY trades ~$40-60, on a totally different scale than the
+        ~15-30 VIX level these thresholds assume, so it would always misread)."""
         if not self._market:
             return {}
         try:
-            # Alpaca supports VIX as a quoted index on some plans.
-            px = self._market.latest_price("VIXY")  # VIX ETF proxy (more widely available)
+            px = self._market.latest_price("^VIX")
             if px is None:
                 return {}
             level = float(px)
@@ -59,6 +65,6 @@ class MacroData:
                 interp = "moderate"
             else:
                 interp = "calm"
-            return {"proxy": "VIXY", "level": round(level, 2), "interpretation": interp}
+            return {"level": round(level, 2), "interpretation": interp}
         except Exception:
             return {}

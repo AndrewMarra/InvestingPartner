@@ -51,40 +51,57 @@ class ResearchEngine:
                 return b.input
         return None
 
-    # ── agentic decision call with optional web search ───────────────
+    @staticmethod
+    def _extract_tool(resp, name: str) -> dict | None:
+        for b in resp.content:
+            if getattr(b, "type", None) == "tool_use" and b.name == name:
+                return b.input
+        return None
+
+    # ── decision call with server-side web search ────────────────────
     def _decide_call(self, system: str, user_msg: str) -> dict | None:
-        """Run the decision model. Claude may call web_search freely before
-        ultimately calling submit_decisions. Handles up to 5 turns."""
+        """Run the decision model with web_search available.
+
+        web_search is an Anthropic *server-side* tool: Claude runs the searches
+        and reads the results inside the same request (we never execute it or
+        return tool_results for it). To let it search before deciding, we leave
+        tool_choice on the default `auto` — forcing a tool would make Claude emit
+        that tool immediately and skip searching. The server runs its own loop
+        and may return stop_reason="pause_turn" if it hits the per-turn cap; we
+        resend to resume. If Claude finishes with prose instead of calling
+        submit_decisions, we make one final forced call to extract the decision.
+        """
         tools = [
             prompts.DECISION_TOOL,
-            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
         ]
         messages = [{"role": "user", "content": user_msg}]
-        for _ in range(5):
+
+        # Phase 1 — let Claude search + reason; resume across pause_turn caps.
+        for _ in range(4):
             resp = self.client.messages.create(
-                model=self.decision_model,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                system=system,
-                tools=tools,
-                tool_choice={"type": "any"},
-                messages=messages,
-            )
-            for b in resp.content:
-                if getattr(b, "type", None) == "tool_use" and b.name == "submit_decisions":
-                    return b.input
-            # Claude called web_search (or something else) — continue conversation.
+                model=self.decision_model, max_tokens=self.max_tokens,
+                temperature=self.temperature, system=system, tools=tools,
+                messages=messages)
+            found = self._extract_tool(resp, "submit_decisions")
+            if found is not None:
+                return found
             messages.append({"role": "assistant", "content": resp.content})
-            tool_results = [
-                {"type": "tool_result", "tool_use_id": b.id, "content": "Done."}
-                for b in resp.content
-                if getattr(b, "type", None) == "tool_use"
-                and b.name != "submit_decisions"
-            ]
-            if not tool_results:
-                break
-            messages.append({"role": "user", "content": tool_results})
-        return None
+            if resp.stop_reason != "pause_turn":
+                break  # finished with prose (or stopped) without the tool
+
+        # Phase 2 — force the structured tool now that any searching is done.
+        # web_search stays in `tools` so prior server-tool result blocks in the
+        # history remain valid; tool_choice forces submit_decisions immediately.
+        messages.append({"role": "user", "content":
+            "Now call submit_decisions with your final idea(s) "
+            "(an empty decisions list / HOLD is fine)."})
+        forced = self.client.messages.create(
+            model=self.decision_model, max_tokens=self.max_tokens,
+            temperature=self.temperature, system=system, tools=tools,
+            tool_choice={"type": "tool", "name": "submit_decisions"},
+            messages=messages)
+        return self._extract_tool(forced, "submit_decisions")
 
     # ── cheap triage ─────────────────────────────────────────────────
     def compact_signals(self) -> dict:

@@ -157,12 +157,14 @@ class OptionsData:
             if q:
                 result["bid"] = _f(q, "bid_price")
                 result["ask"] = _f(q, "ask_price")
+            # IV is a top-level field on OptionsSnapshot; the Greeks model
+            # (delta/gamma/rho/theta/vega) does NOT carry it.
+            result["iv"] = _f(snap, "implied_volatility")
             if g:
                 result["delta"] = _f(g, "delta")
                 result["gamma"] = _f(g, "gamma")
                 result["theta"] = _f(g, "theta")
                 result["vega"] = _f(g, "vega")
-                result["iv"] = _f(g, "implied_volatility")
             return result or (self.quote(occ_symbol) or {})
         except Exception:
             return self.quote(occ_symbol) or {}
